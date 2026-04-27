@@ -4,6 +4,7 @@
 .env
 .env.*
 *.json
+firebase.js
 !package.json          # Don't ignore these essential config files
 !tsconfig.json
 !manifest.json
@@ -23,7 +24,7 @@ node_modules/
 /coverage
 .pnp
 .pnp.js
-firebase.js
+
 
 # --- Logs & OS ---
 *.log
