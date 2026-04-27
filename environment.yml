@@ -1,0 +1,40 @@
+name: yt_analyzer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Core Python
+  - python=3.11  # Upgrading to 3.11 for better performance and future-proofing
+  
+  # Frontend Runtime (Installed inside the env)
+  - nodejs=20
+  
+  # Web Framework & APIs
+  - fastapi
+  - uvicorn
+  - python-dotenv
+  - requests
+  
+  # Data Science & Scraping
+  - pandas
+  - numpy
+  - scikit-learn
+  - yt-dlp
+  - beautifulsoup4
+  - selenium
+  
+  # Machine Learning (Apple Silicon Support)
+  - pytorch  # Works with Metal Performance Shaders (MPS)
+  - torchvision
+  - torchaudio
+  
+  # NLP & LLM
+  - transformers
+  - sentencepiece
+  - google-genai  # The modern Gemini SDK
+  
+  # Pip-specific packages (for those not easily found on Conda)
+  - pip:
+    - youtube-transcript-api
+    - google-generativeai # Keeping for backward compatibility if needed
+    - cardiffnlp-twitter-roberta-base-sentiment # Specific model utils
