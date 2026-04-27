@@ -4,7 +4,8 @@
 .env
 .env.*
 *.json
-firebase.js
+# This covers firebase.js in the root OR any subfolder
+**/firebase.js
 !package.json          # Don't ignore these essential config files
 !tsconfig.json
 !manifest.json
