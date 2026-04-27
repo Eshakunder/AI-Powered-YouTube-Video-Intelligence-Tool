@@ -23,6 +23,7 @@ node_modules/
 /coverage
 .pnp
 .pnp.js
+firebase.js
 
 # --- Logs & OS ---
 *.log
