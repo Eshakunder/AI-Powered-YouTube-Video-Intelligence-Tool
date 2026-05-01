@@ -1,19 +1,154 @@
+# import pandas as pd
+# from transformers import pipeline
+# from google import genai
+# import os
+# from dotenv import load_dotenv
+# from pathlib import Path
+# import json
+
+# # Load .env
+# base_dir = Path(__file__).resolve().parent.parent.parent.parent
+# load_dotenv(base_dir / ".env")
+
+
+# class VideoSentiment:
+#     def __init__(self):
+#         # 🔹 Fast baseline model
+#         self.local_pipe = pipeline(
+#             "sentiment-analysis",
+#             model="cardiffnlp/twitter-roberta-base-sentiment"
+#         )
+
+#         self.label_map = {
+#             "LABEL_0": -1,
+#             "LABEL_1": 0,
+#             "LABEL_2": 1
+#         }
+
+#         # 🔹 LLM setup
+#         api_key = os.getenv("GEMINI_API_KEY")
+#         self.client = genai.Client(api_key=api_key)
+
+#     # ----------------------------------
+#     # 🔥 LLM BATCH REFINEMENT
+#     # ----------------------------------
+#     def _batch_llm(self, texts):
+#         formatted = "\n".join(
+#             [f"{i+1}. {t}" for i, t in enumerate(texts)]
+#         )
+
+#         prompt = f"""
+#         Analyze sentiment of each sentence.
+
+#         Return ONLY JSON list of floats between -1 and 1.
+
+#         -1 = very negative
+#         0 = neutral
+#         +1 = very positive
+
+#         Sentences:
+#         {formatted}
+#         """
+
+#         try:
+#             response = self.client.models.generate_content(
+#                 model="gemini-2.5-flash",
+#                 contents=prompt
+#             )
+
+#             scores = json.loads(response.text.strip())
+#             return scores
+
+#         except Exception as e:
+#             print(f"LLM error: {e}")
+#             return None
+
+#     # ----------------------------------
+#     # MAIN PIPELINE
+#     # ----------------------------------
+#     def analyze(self, chunked_df: pd.DataFrame) -> pd.DataFrame:
+#         if chunked_df.empty:
+#             return chunked_df
+
+#         # -----------------------------
+#         # STEP 1: RoBERTa baseline
+#         # -----------------------------
+#         texts = chunked_df['clean_text'].fillna("").str.slice(0, 512).tolist()
+
+#         results = self.local_pipe(texts)
+
+#         chunked_df['sentiment_score'] = [
+#             self.label_map[r['label']] for r in results
+#         ]
+
+#         # convert to float
+#         chunked_df['sentiment_score'] = chunked_df['sentiment_score'].astype(float)
+
+#         # -----------------------------
+#         # STEP 2: FILTER (important chunks)
+#         # -----------------------------
+#         # refine only strong or long chunks
+#         mask = (
+#             (chunked_df['sentiment_score'].abs() == 1) |  # strong sentiment
+#             (chunked_df['clean_text'].str.len() > 120)     # long content
+#         )
+
+#         important_chunks = chunked_df[mask]
+
+#         # -----------------------------
+#         # STEP 3: LLM refinement
+#         # -----------------------------
+#         if not important_chunks.empty:
+#             texts = important_chunks['clean_text'].tolist()
+
+#             batch_size = 15
+#             all_scores = []
+
+#             for i in range(0, len(texts), batch_size):
+#                 batch = texts[i:i + batch_size]
+#                 scores = self._batch_llm(batch)
+
+#                 if scores is None:
+#                     scores = [None] * len(batch)
+
+#                 all_scores.extend(scores)
+
+#             # update values
+#             for idx, score in zip(important_chunks.index, all_scores):
+#                 if score is not None:
+#                     chunked_df.at[idx, 'sentiment_score'] = float(score)
+#                     chunked_df.at[idx, 'is_llm_refined'] = True
+#                 else:
+#                     chunked_df.at[idx, 'is_llm_refined'] = False
+
+#         # -----------------------------
+#         # STEP 4: SMOOTHING
+#         # -----------------------------
+#         chunked_df['smoothed_sentiment'] = (
+#             chunked_df['sentiment_score']
+#             .rolling(window=5, min_periods=1)
+#             .mean()
+#         )
+
+#         return chunked_df
+
 import pandas as pd
+import json
+import re
+import os
 from transformers import pipeline
 from google import genai
-import os
 from dotenv import load_dotenv
 from pathlib import Path
-import json
 
-# Load .env
+# Load env
 base_dir = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(base_dir / ".env")
 
 
 class VideoSentiment:
     def __init__(self):
-        # 🔹 Fast baseline model
+        # Local fast model
         self.local_pipe = pipeline(
             "sentiment-analysis",
             model="cardiffnlp/twitter-roberta-base-sentiment"
@@ -25,109 +160,99 @@ class VideoSentiment:
             "LABEL_2": 1
         }
 
-        # 🔹 LLM setup
+        # Gemini
         api_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=api_key)
 
-    # ----------------------------------
-    # 🔥 LLM BATCH REFINEMENT
-    # ----------------------------------
+    # -----------------------------
+    # SAFE LLM BATCH
+    # -----------------------------
     def _batch_llm(self, texts):
-        formatted = "\n".join(
-            [f"{i+1}. {t}" for i, t in enumerate(texts)]
-        )
+        formatted = "\n".join([f"{i+1}. {t}" for i, t in enumerate(texts)])
 
         prompt = f"""
-        Analyze sentiment of each sentence.
+Return ONLY a JSON array of floats between -1 and 1.
 
-        Return ONLY JSON list of floats between -1 and 1.
+Example:
+[0.5, -0.2, 0.0]
 
-        -1 = very negative
-        0 = neutral
-        +1 = very positive
-
-        Sentences:
-        {formatted}
-        """
+Sentences:
+{formatted}
+"""
 
         try:
             response = self.client.models.generate_content(
-                model="gemini-3.1-flash-lite-preview",
+                model="gemini-2.5-flash",
                 contents=prompt
             )
 
-            scores = json.loads(response.text.strip())
-            return scores
+            if not response or not response.text:
+                return None
+
+            raw = response.text.strip()
+
+            try:
+                return json.loads(raw)
+
+            except:
+                # fallback: extract numbers
+                nums = re.findall(r'-?\d+\.\d+|-?\d+', raw)
+                if not nums:
+                    return None
+                return [float(n) for n in nums]
 
         except Exception as e:
-            print(f"LLM error: {e}")
+            print("LLM error:", e)
             return None
 
-    # ----------------------------------
-    # MAIN PIPELINE
-    # ----------------------------------
-    def analyze(self, chunked_df: pd.DataFrame) -> pd.DataFrame:
-        if chunked_df.empty:
-            return chunked_df
+    # -----------------------------
+    # MAIN
+    # -----------------------------
+    def analyze(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
 
-        # -----------------------------
-        # STEP 1: RoBERTa baseline
-        # -----------------------------
-        texts = chunked_df['clean_text'].fillna("").str.slice(0, 512).tolist()
+        df['is_llm_refined'] = False
 
+        texts = df['clean_text'].fillna("").str.slice(0, 512).tolist()
         results = self.local_pipe(texts)
 
-        chunked_df['sentiment_score'] = [
-            self.label_map[r['label']] for r in results
+        df['sentiment_score'] = [
+            float(self.label_map[r['label']]) for r in results
         ]
 
-        # convert to float
-        chunked_df['sentiment_score'] = chunked_df['sentiment_score'].astype(float)
-
-        # -----------------------------
-        # STEP 2: FILTER (important chunks)
-        # -----------------------------
-        # refine only strong or long chunks
+        # Select important chunks
         mask = (
-            (chunked_df['sentiment_score'].abs() == 1) |  # strong sentiment
-            (chunked_df['clean_text'].str.len() > 120)     # long content
+            (df['sentiment_score'].abs() >= 0.8) |
+            (df['clean_text'].str.len() > 150)
         )
 
-        important_chunks = chunked_df[mask]
+        important = df[mask]
 
-        # -----------------------------
-        # STEP 3: LLM refinement
-        # -----------------------------
-        if not important_chunks.empty:
-            texts = important_chunks['clean_text'].tolist()
-
+        if not important.empty:
+            texts = important['clean_text'].tolist()
             batch_size = 15
             all_scores = []
 
             for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
+                batch = texts[i:i+batch_size]
                 scores = self._batch_llm(batch)
 
-                if scores is None:
+                if scores is None or len(scores) != len(batch):
                     scores = [None] * len(batch)
 
                 all_scores.extend(scores)
 
-            # update values
-            for idx, score in zip(important_chunks.index, all_scores):
+            for idx, score in zip(important.index, all_scores):
                 if score is not None:
-                    chunked_df.at[idx, 'sentiment_score'] = float(score)
-                    chunked_df.at[idx, 'is_llm_refined'] = True
-                else:
-                    chunked_df.at[idx, 'is_llm_refined'] = False
+                    df.at[idx, 'sentiment_score'] = float(score)
+                    df.at[idx, 'is_llm_refined'] = True
 
-        # -----------------------------
-        # STEP 4: SMOOTHING
-        # -----------------------------
-        chunked_df['smoothed_sentiment'] = (
-            chunked_df['sentiment_score']
+        # Smooth
+        df['smoothed_sentiment'] = (
+            df['sentiment_score']
             .rolling(window=5, min_periods=1)
             .mean()
         )
 
-        return chunked_df
+        return df
