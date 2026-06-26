@@ -47,7 +47,7 @@ class ContradictionAnalyzer:
 
         try:
             response = self.client.models.generate_content(
-                model="gemini-2.5-flash",  # better reasoning
+                model="gemini-3-flash-preview",  # better reasoning
                 contents=prompt
             )
             return response.text.strip()
